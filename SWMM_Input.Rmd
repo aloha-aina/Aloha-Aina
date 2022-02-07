@@ -1,0 +1,749 @@
+---
+title: "SWMM Input"
+author: "Elmera Azadpour, Genevieve Chiong, Kristin Gill, Lauren Skube, and Cat Takata"
+date: "2/7/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(here)
+library(sf)
+library(janitor)
+library(data.table)
+library(geosphere)
+```
+
+## Curve Numbers
+```{r}
+#Load data for curve numbers from final curve numbers code
+curve_numbers_kuliouou <- read_csv(here("data", "swmm_input_data", "curve_numbers_percentage_kuliouou.csv")) %>% 
+  filter(curve_number_numerical != "NA") 
+
+# formatting for SWMM
+all_cn_weighted_kuliouou <- curve_numbers_kuliouou %>% 
+  group_by(subcatchments_recon_aa_20211027_Id) %>% #grouping by subcatchment and then doing a weighted mean
+  summarize(mean_cn= weighted.mean(curve_number_numerical, PERCENTAGE))
+
+# output file 
+write.csv(all_cn_weighted_kuliouou, file = here("output","curve_number_weighted_kuliouou.csv"))
+
+rm(curve_numbers_kuliouou)
+gc()
+```
+
+## Slope
+```{r}
+# read in the data
+slopes_kuliouou <- read_csv(here("data", "swmm_input_data","slope_kuliouou_percentage.csv"))
+
+# formatting for SWMM
+slope_weighted_kuliouou <- slopes_kuliouou %>% 
+  rename(slope = gridcode_float) %>% 
+  group_by(subcatchments_recon_aa_20211027_Id) %>% #grouping by subcatchment and then doing a weighted mean
+  summarize(mean_slope=weighted.mean(slope, PERCENTAGE))
+
+# output file
+write.csv(slope_weighted_kuliouou, file = here("output","slope_weighted_kuliouou.csv"))
+
+rm(slopes_kuliouou)
+gc()
+```
+
+
+## Subcatchments
+```{r}
+subcatchments <- read_sf(here("data", "swmm_input_data", "subcatchments", "subcatchment_vertices.shp")) %>% 
+  select(subcatchme, geometry)
+
+subcatchment_coordinates <- subcatchments %>% 
+  mutate(long = unlist(map(geometry,1)),
+         lat = unlist(map(geometry,2))) %>% 
+  rename(objectid = subcatchme) %>% 
+  select(objectid, lat, long)
+
+rm(subcatchments)
+gc()
+```
+
+### Impervious Surfaces Percentage
+```{r}
+impervious_percentage <- read_csv(here("data", "swmm_input_data", "impervious_kuliouou_percentage.csv")) %>% 
+  rename(percent_impervious = PERCENTAGE) %>% 
+  select("subcatchments_recon_aa_20211027_Id", "percent_impervious")
+```
+
+### Slope Percentage
+```{r}
+slope_percentage <- slope_weighted_kuliouou %>% 
+  select("subcatchments_recon_aa_20211027_Id", "mean_slope")
+
+rm(slope_weighted_kuliouou)
+gc()
+```
+
+### Curve Number Percentage 
+```{r}
+curve_numbers_percentage <- all_cn_weighted_kuliouou %>% 
+  select("subcatchments_recon_aa_20211027_Id", "mean_cn")
+
+rm(all_cn_weighted_kuliouou)
+gc()
+```
+
+### Merge Data
+```{r}
+merge_cn_slope <- merge(curve_numbers_percentage, slope_percentage, by = "subcatchments_recon_aa_20211027_Id")
+
+attributes <- merge(merge_cn_slope, impervious_percentage, by = "subcatchments_recon_aa_20211027_Id", all.x = TRUE) %>% 
+  rename(objectid = subcatchments_recon_aa_20211027_Id)
+
+attributes[is.na(attributes)] <- 0 
+
+rm(curve_numbers_percentage)
+rm(merge_cn_slope)
+rm(impervious_percentage)
+rm(slope_percentage)
+gc()
+```
+
+### Subcatchment Area and Width
+```{r}
+subcatchment_area <- read_csv(here("data", "swmm_input_data", "subcatchments_area_sqft.csv")) %>% 
+  rename(objectid = OBJECTID) %>% 
+  rename(area_sqft = Shape_Area) %>% 
+  select(objectid, area_sqft)
+
+subcatchment_length <- read_csv(here("data", "swmm_input_data", "lengths_subcatchments.csv")) %>% 
+  rename(objectid = OBJECTID) %>% 
+  rename(length_ft = LENGTH) %>% 
+  select(objectid, length_ft)
+
+subcatchment_width <- merge(subcatchment_area, subcatchment_length, by.x = "objectid", all.x= TRUE) %>% 
+  mutate(width_ft = area_sqft/length_ft) %>% 
+  select(objectid, width_ft)
+```
+
+#### Subcatchments Input File
+```{r}
+coordinates_attributes <- merge(subcatchment_coordinates, attributes, by = "objectid") %>% distinct (objectid, .keep_all = TRUE) 
+
+coordinates_attributes <- merge(coordinates_attributes, subcatchment_area, by = "objectid")
+
+coordinates_attributes <- merge(coordinates_attributes, subcatchment_width, by = "objectid")
+
+subc <- coordinates_attributes %>%
+  mutate(area_acre = area_sqft*0.0000229568) %>% 
+  rename(area = area_acre,
+    imperv = percent_impervious,
+    name = objectid,
+    slope = mean_slope,
+    curve_number = mean_cn) %>% 
+  distinct() %>% 
+  mutate(width = case_when(
+    width_ft > 400 ~ 400,
+    width_ft <= 400 ~ width_ft 
+  )) %>% 
+  st_set_geometry(NULL)
+
+subc[is.na(subc)] <- 400 
+
+#add columns for "subcatchments" file. 
+subc$rain_gage <- "R1" 
+subc$outlet <- "J1" 
+subc$curblen <- 0
+
+#arrange
+subc_file <- subc %>% 
+  select(
+    name, 
+    rain_gage, 
+    outlet, 
+    area, 
+    imperv, 
+    width, 
+    slope, 
+    curblen
+    ) %>% 
+  distinct(name, .keep_all = TRUE)
+
+write.csv(subc_file, here("output", "inp_subcatchments.csv"), row.names = FALSE)
+
+rm(subcatchment_area)
+rm(subcatchment_length)
+rm(subcatchment_width)
+rm(coordinates_attributes)
+rm(attributes)
+gc()
+```
+
+
+### Sub Areas
+```{r}
+suba <- subc_file %>% 
+  select(name) %>% 
+  rename(subcatchment = name) %>% 
+  distinct()
+
+suba$n_imperv <- 0.01 #manning's n for impervious surfaces - values from SWMM Manual
+
+suba$n_perv <- 0.4 #manning's n for pervious (natural) surfaces. 0.4 for forested subcatchments. 
+#Later, identify urban subcatchments and input 0.15. - values from SWMM Manual  
+
+suba$s_imperv <- 0.2 #impervious surface depth of depression storage (in) - values in SWMM Manual
+
+suba$s_perv <- 0.3 #pervious (natural) surface depth of depression storage - values in SWMM manual
+
+suba$pctzero <- 0
+suba$RouteTo <- "OUTLET"
+
+#n is for Manning's n, and s is for Depth of Depression Storage.
+
+write.csv(suba, here("output", "inp_subareas.csv"), row.names = FALSE)
+
+rm(suba)
+rm(subc_file)
+gc()
+```
+
+### Infiltration
+```{r}
+infil <- subc %>% 
+  select(name,
+         curve_number) %>% 
+  rename(subcatchment = name) %>% 
+  distinct()
+
+infil$Blank <- 0.5 #this is conductivity, however this may have been depreciated in the model
+infil$DryTime <- 7 #units in days
+
+write.csv(infil, here("output", "inp_infiltration.csv"), row.names = FALSE)
+
+rm(infil)
+rm(subc)
+gc()
+```
+
+### Polygons
+```{r}
+polygons <- subcatchment_coordinates %>%
+  rename(name = objectid,
+         y = lat,
+         x = long) %>% 
+  select(name, x,y) %>% 
+  rename(subcatchment = name) %>% 
+  st_set_geometry(NULL) %>% 
+  distinct()
+
+write.csv(polygons, here("output", "inp_polygons.csv"), row.names = FALSE)
+
+rm(subcatchment_coordinates)
+rm(polygons)
+gc()
+```
+
+## Stormwater Network --- NEED TO FIX
+```{r}
+conduits <- read_sf(here("data", "swmm_input_data", "stormwater_conduits_shp", "vertices.shp")) %>% 
+  clean_names() %>% 
+  mutate(long = unlist(map(geometry,1)),
+         lat = unlist(map(geometry,2))) %>% 
+  st_set_geometry(NULL)
+
+conduits_2 <- read_csv(here("data", "swmm_input_data", "stormwater_conduits.csv"))
+```
+
+```{r, message = FALSE}
+network <- conduits %>% 
+  select(
+  objectid,
+  long,
+  lat,
+  elevation,
+  subcatch_r,
+  roughness,
+  type,
+  diameter,
+  width,
+  height,
+  type_1
+  ) %>% 
+  rename(
+    name = objectid,
+    x = point_x,
+    y = point_y,
+    subc = subcatch_r,
+    elevation = elevation,
+    shape = type,
+    structure = type_1
+    ) %>% 
+  mutate (shape = str_replace_all(shape, "Reinforced Concrete Pipe", "CIRCULAR")) %>% 
+  mutate (shape = str_replace_all(shape, "Box Culvert", "RECT_CLOSED")) %>% 
+  mutate (shape = str_replace_all(shape, "Channel", "TRAPEZOIDAL")) %>% 
+  mutate (shape = str_replace_all(shape, "Ditch", "RECT_OPEN")) %>% 
+  mutate (shape = str_replace_all(shape, "Other", "RECT_OPEN")) %>% 
+  distinct()
+
+```
+
+"Length" provided by USGS is distance between xy points. This "length"" is not the actual length of the conduit because it does not take into consideration height (xyz), so we will use the difference between lower distance between xy points calcualte the actual length further down in the code.  
+
+We will also re-calculate distance between xy points because different sources return  different values for some of the conduits and some conduits need to have this distance calculated anyway because it is blank. 
+
+## 1. Create unique names for nodes with the same x and y coordinates, and unique names for conduits
+
+```{r}
+#Index xy coordinates with unique IDs if different, same IDs if repeated
+unique <- network %>% 
+  mutate(
+    node = group_indices(
+      network, x, y
+      )
+    ) 
+
+#Assign nodes the letter j for "junction" (SWMM terminology) and conduits the letter c for 
+#"conduit" (SWMM terminology)
+
+unique$c <- "C"
+unique$j <- "J"
+
+#conduits
+unique$name= paste(unique$c,unique$name)
+
+#remove space
+unique$name <- gsub(
+  '\\s+', '', unique$name
+  )
+#node
+unique$node= paste(unique$j,unique$node)
+
+#remove space
+unique$node <- gsub(
+  '\\s+', '', unique$node
+  )
+
+```
+
+## 2. Arrange and reshape data 
+Note: each conduit has start and end coordinates and nodes, - so there are duplicate rows for each conduit. We want to reshape this data to have both xy and nodes in the same row.
+
+```{r}
+#arrange by conduit name and descending elevation
+arrange <- unique[
+  with(
+  unique, order(
+    name, 
+    -elevation, 
+    na.last=FALSE)
+  ),
+  ]
+
+#reshape data
+reshape_dt <- dcast(
+  setDT(arrange), 
+  name + roughness ~ rowid(name, prefix="node"), 
+  value.var=c("node", "x", "y", "elevation"))
+
+```
+
+## 3. Length
+
+We must now calculate the length of the conduits using the following steps:
+a. Find distance "length" between xy coordinates of each conduit using geosphere.
+b. Use difference in elevation to calculate height
+c. Use pythag. theorem to calculate length
+
+```{r}
+#part a -  distance (adjust code based on number of pairs. 
+#This dataset has 18 based on the longest conduit)
+
+dist <- reshape_dt %>%  
+  rowwise(
+  ) %>% 
+  mutate (
+    dist_m = distm(c(x_node1, y_node1), 
+                   c(x_node2, y_node2), 
+                   fun = distHaversine
+                   )
+    ) %>% 
+  mutate(
+    dist_ft = dist_m*3.28084
+    )
+
+#part b and c - height then length
+lengths <- dist %>%  
+  mutate (
+    length = sqrt(
+      (dist_ft)^2 + (elevation_node1-elevation_node2)^2)
+          )%>% 
+  rename (
+    from_node = node_node1,
+    to_node = node_node2
+  )
+
+```
+
+## 4. File output for conduits
+[CONDUITS]								
+;;Name  From Node To Node  Length Roughness InOffset  OutOffset InitFlow  MaxFlow  
+;;---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- ----------  
+** The channelized stream needs to connect with the stormwater infrastructure via junctions/nodes in the urban region.   It is feasible to connect them manually by drawing in the stream conduit in SWMM.  
+
+Use roughness value 0.01, for concrete pipes found in Appendix A-8 pg. 184 of EPA manual  
+```{r}
+conduits <- lengths %>% 
+  mutate(
+    roughness = ifelse(is.na(roughness), 0.01, roughness)
+    ) %>% 
+  select(
+    name,
+    from_node, 
+    to_node,
+    length, 
+    roughness 
+    ) 
+
+conduits$inoffset <- 0
+conduits$outoffset <- 0
+conduits$initflow <- 0
+conduits$maxflow <- 0
+
+
+write.csv(conduits,"inp_conduits.csv", row.names = FALSE)
+```
+
+## 5. File output for conduit cross sections
+[XSECTIONS]							
+;;Link  Shape	Geom1	Geom2	Geom3 Geom4 Barrels Culvert   
+;;--------------	------------	----------------	----------  
+
+```{r}
+xsection_dt <- merge(
+  lengths, 
+  unique, 
+  by = "name"
+  ) %>% 
+  select (
+    name, 
+    length, 
+    shape, 
+    diameter, 
+    width, 
+    height
+    )
+```
+
+
+a - concrete pipe dimensions
+```{r}
+pipes<- xsection_dt %>% 
+  filter(
+    shape == "CIRCULAR"
+    ) %>% 
+  rename(
+    geom1 = diameter,
+    link = name
+    ) %>%
+  mutate(
+    geom1 = ifelse(is.na(geom1), "23", geom1)
+    ) %>% 
+  mutate(
+    geom1 = ifelse((geom1=="Other"), "23", (geom1))
+    )%>% 
+  select(
+    link, 
+    shape,
+    length,
+    geom1
+  )
+pipes$geom2 <- 0
+pipes$geom3 <- 0
+pipes$geom4 <- 0
+pipes$barrels <- 
+pipes$culvert <- 0
+```
+
+b - box culverts, ditches, and "other" conduit dimensions
+```{r}
+ditch_box <- xsection_dt %>% 
+  filter(
+    shape == "RECT_CLOSED" | shape == "RECT_OPEN"
+    ) %>% 
+  rename (
+    geom1 = width, 
+    geom2 = height,
+    link = name
+    ) %>% 
+  mutate(
+    geom1 = ifelse(is.na(geom1), 5, geom1)
+    ) %>% 
+  mutate(geom2 = ifelse(is.na(geom2), 5, geom2)
+         ) %>% 
+  select( 
+    link, 
+    shape, 
+    length,
+    geom1,
+    geom2
+    
+  )
+ditch_box$geom3 <- 0
+ditch_box$geom4 <- 0
+ditch_box$barrels <- 
+ditch_box$culvert <- 0
+```
+
+
+c - channel (channelized stream) dimenssions
+```{r}
+channel <- xsection_dt %>% 
+  filter(
+    is.na(shape)
+    ) %>% 
+  mutate(
+    shape = ifelse(is.na(shape), "TRAPEZOIDAL", shape)
+    ) %>% 
+  rename(
+    geom1 = width, 
+    geom2 = height,
+    link = name
+    ) %>% 
+  mutate(
+    geom1 = ifelse(is.na(geom1), 30, geom1)
+    ) %>% 
+  mutate(
+    geom2 = ifelse(is.na(geom2), 10, geom2)
+    ) %>% 
+  select(
+     link, 
+    shape,
+    length,
+    geom1,
+    geom2
+    )
+#Geom3 and Geom4 are side lopes, which literature indicate vary from 1/1 to 1/2.  
+#Ive seen side slopes perpendicular to the ground, especially where homes are built.
+channel$geom3 <- 1
+channel$geom4 <- 1
+channel$barrels <- 
+channel$culvert <- 0
+```
+
+e- bind all tables
+```{r}
+xsections_df <- rbind(
+  pipes, 
+  ditch_box, 
+  channel
+  ) %>% 
+  select(
+    link, 
+    shape, 
+    geom1, 
+    geom2, 
+    geom3, 
+    geom4, 
+    barrels, 
+    culvert, 
+    length
+    ) %>%  
+  distinct(
+    link, 
+    shape, 
+    geom1, 
+    geom2, 
+    .keep_all = TRUE
+    )
+
+xsections <- rbind(
+  pipes, 
+  ditch_box, 
+  channel
+  ) %>% 
+  select(
+    link, 
+    shape, 
+    geom1, 
+    geom2, 
+    geom3, 
+    geom4, 
+    barrels, 
+    culvert
+    ) %>% 
+  distinct(
+    link, 
+    shape, 
+    geom1, 
+    geom2, 
+    .keep_all = TRUE
+    )
+
+write.csv(xsections,"inp_xsections.csv", row.names = FALSE)
+```
+
+
+## 6. Junctions and coordinates/vertices
+
+[JUNCTIONS]					
+;;Name  Elevation MaxDepth  InitDepth SurDepth  Aponded   
+;;--------------	----------	----------	----------	
+```{r}
+
+junctions <- unique %>% filter(
+    structure != "Inlet/Outlet" | is.na(structure)
+    ) %>% 
+  select(
+    node, 
+    elevation
+    ) %>% 
+  rename(
+    name = node
+    ) %>% 
+  distinct(
+    name,
+    .keep_all = TRUE
+  )
+junctions$maxdepth <- 0
+junctions$initdepth <- 0
+junctions$surdepth <- 0
+junctions$aponded <- 0
+
+#filter for structure type in here so we can designate which junctions are outfalls
+write.csv(junctions,"inp_junctions.csv", row.names = FALSE)
+```
+
+Here is a csv that will help determine what junction to route each subcatchment's outlet to.
+```{r, message = FALSE, results = 'hide'}
+route_to <- unique %>% 
+  select(
+    node, 
+    elevation,
+    subc
+    )
+
+route_to[
+  with(
+  route_to, order(
+    subc, 
+    -elevation, 
+    na.last=FALSE)
+  ),
+  ]
+
+route_to2 <-unique %>% 
+  group_by(
+    subc
+    ) %>% 
+  mutate(
+    rank = row_number(subc)
+    ) %>% 
+  filter(
+    rank == 1 | is.na(rank)
+    ) %>% 
+  select(
+    subc,
+    node
+    )
+
+write.csv(route_to2,"subc_outlet.csv", row.names = FALSE)
+  
+```
+
+## 7. Outfalls
+[OUTFALLS]					
+;;Name          	Elevation 	Type      	Stage Data      	Gated   	Route To     
+;;--------------	----------	----------	----------------	--------	----------------  
+```{r}
+outfalls <- unique %>% 
+   filter(
+    structure == "Inlet/Outlet"
+    ) %>% 
+  select(
+    node, 
+    elevation
+    ) %>% 
+  rename(
+    name = node
+    ) %>% 
+  distinct(
+    name,
+    .keep_all = TRUE
+  )
+outfalls$type <- "FREE"
+outfalls$stagedata <- NA
+outfalls$gated <- "NO"
+outfalls$routeto <- NA
+
+#you will need to check these structures in SWMM. 
+#If these structures are at an end of a conduit, then they are outfalls, 
+#otherwise you can quickly turn them back into a junction in SWMM.
+
+write.csv(outfalls,"inp_outfalls.csv", row.names = FALSE)
+```
+## 8. Coordinates
+[COORDINATES]		
+;;Node          	X-Coord           	Y-Coord           
+;;--------------	------------------	------------------
+
+SWMM takes x and y that are in decimal degrees  (lat and long).
+```{r}
+coordinates <- unique %>% 
+  select(
+    node, 
+    x, 
+    y
+    ) %>% 
+  distinct(
+    node,
+    x,
+    y,
+    .keep_all = TRUE
+  )
+
+write.csv(coordinates,"inp_coordinates.csv", row.names = FALSE)
+```
+
+## 9. Vertices
+[VERTICES]		
+;;Link          	X-Coord           	Y-Coord           
+;;--------------	------------------	------------------
+```{r}
+vertices <- vertices_dt %>%
+  select(
+    objectid,
+    point_x,
+    point_y
+  ) %>% 
+  rename(
+   link = objectid,
+   x = point_x,
+   y = point_y
+    ) %>% 
+  distinct(
+    link,
+    x,
+    y,
+    .keep_all = TRUE
+  )
+vertices$c <- "C"
+
+#conduits
+vertices$link <- apply(
+  vertices,1,function(x) paste((x[4]), sep ="",(x[1]))
+  ) 
+
+#remove space
+vertices$link <- gsub(
+  '\\s+', '', vertices$link
+  ) 
+ 
+  vertices1 <- vertices %>% 
+  select(
+    link,
+    x,
+    y
+  )
+
+write.csv(vertices1,"inp_vertices.csv", row.names = FALSE)
+```
