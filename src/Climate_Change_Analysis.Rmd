@@ -1,0 +1,11 @@
+---
+title: "Climate Change"
+author: "Elmera Azadpour, Genevieve Chiong, Kristin Gill, Lauren Skube, and Cat Takata"
+date: "2/7/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+

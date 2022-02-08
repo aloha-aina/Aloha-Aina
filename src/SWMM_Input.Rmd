@@ -156,16 +156,7 @@ subc$curblen <- 0
 
 #arrange
 subc_file <- subc %>% 
-  select(
-    name, 
-    rain_gage, 
-    outlet, 
-    area, 
-    imperv, 
-    width, 
-    slope, 
-    curblen
-    ) %>% 
+  select(name, rain_gage, outlet, area, imperv, width, slope, curblen) %>% 
   distinct(name, .keep_all = TRUE)
 
 write.csv(subc_file, here("output", "inp_subcatchments.csv"), row.names = FALSE)
@@ -210,12 +201,12 @@ gc()
 ### Infiltration
 ```{r}
 infil <- subc %>% 
-  select(name,
-         curve_number) %>% 
+  select(name, curve_number) %>% 
   rename(subcatchment = name) %>% 
   distinct()
 
 infil$Blank <- 0.5 #this is conductivity, however this may have been depreciated in the model
+
 infil$DryTime <- 7 #units in days
 
 write.csv(infil, here("output", "inp_infiltration.csv"), row.names = FALSE)
@@ -245,30 +236,18 @@ gc()
 
 ## Stormwater Network --- NEED TO FIX
 ```{r}
-conduits <- read_sf(here("data", "swmm_input_data", "stormwater_conduits_shp", "vertices.shp")) %>% 
+stormwater_vertices <- read_sf(here("data", "swmm_input_data", "stormwater_conduits_shp", "vertices.shp")) %>% 
   clean_names() %>% 
   mutate(long = unlist(map(geometry,1)),
          lat = unlist(map(geometry,2))) %>% 
   st_set_geometry(NULL)
 
-conduits_2 <- read_csv(here("data", "swmm_input_data", "stormwater_conduits.csv"))
+stormwater_conduits <- read_csv(here("data", "swmm_input_data", "stormwater_conduits.csv"))
 ```
 
 ```{r, message = FALSE}
-network <- conduits %>% 
-  select(
-  objectid,
-  long,
-  lat,
-  elevation,
-  subcatch_r,
-  roughness,
-  type,
-  diameter,
-  width,
-  height,
-  type_1
-  ) %>% 
+network <- stormwater_conduits %>% 
+  select(objectid,long,lat,elevation,subcatch_r,roughness,type,diameter,width,height, type_1) %>% 
   rename(
     name = objectid,
     x = point_x,
@@ -276,15 +255,13 @@ network <- conduits %>%
     subc = subcatch_r,
     elevation = elevation,
     shape = type,
-    structure = type_1
-    ) %>% 
-  mutate (shape = str_replace_all(shape, "Reinforced Concrete Pipe", "CIRCULAR")) %>% 
-  mutate (shape = str_replace_all(shape, "Box Culvert", "RECT_CLOSED")) %>% 
-  mutate (shape = str_replace_all(shape, "Channel", "TRAPEZOIDAL")) %>% 
-  mutate (shape = str_replace_all(shape, "Ditch", "RECT_OPEN")) %>% 
-  mutate (shape = str_replace_all(shape, "Other", "RECT_OPEN")) %>% 
+    structure = type_1) %>% 
+  mutate(shape = str_replace_all(shape, "Reinforced Concrete Pipe", "CIRCULAR")) %>%
+  mutate(shape = str_replace_all(shape, "Box Culvert", "RECT_CLOSED")) %>% 
+  mutate(shape = str_replace_all(shape, "Channel", "TRAPEZOIDAL")) %>% 
+  mutate(shape = str_replace_all(shape, "Ditch", "RECT_OPEN")) %>% 
+  mutate(shape = str_replace_all(shape, "Other", "RECT_OPEN")) %>% 
   distinct()
-
 ```
 
 "Length" provided by USGS is distance between xy points. This "length"" is not the actual length of the conduit because it does not take into consideration height (xyz), so we will use the difference between lower distance between xy points calcualte the actual length further down in the code.  
@@ -296,11 +273,7 @@ We will also re-calculate distance between xy points because different sources r
 ```{r}
 #Index xy coordinates with unique IDs if different, same IDs if repeated
 unique <- network %>% 
-  mutate(
-    node = group_indices(
-      network, x, y
-      )
-    ) 
+  mutate(node = group_indices(network, x, y)) 
 
 #Assign nodes the letter j for "junction" (SWMM terminology) and conduits the letter c for 
 #"conduit" (SWMM terminology)
@@ -312,17 +285,13 @@ unique$j <- "J"
 unique$name= paste(unique$c,unique$name)
 
 #remove space
-unique$name <- gsub(
-  '\\s+', '', unique$name
-  )
+unique$name <- gsub('\\s+', '', unique$name)
+
 #node
 unique$node= paste(unique$j,unique$node)
 
 #remove space
-unique$node <- gsub(
-  '\\s+', '', unique$node
-  )
-
+unique$node <- gsub('\\s+', '', unique$node)
 ```
 
 ## 2. Arrange and reshape data 
@@ -330,21 +299,13 @@ Note: each conduit has start and end coordinates and nodes, - so there are dupli
 
 ```{r}
 #arrange by conduit name and descending elevation
-arrange <- unique[
-  with(
-  unique, order(
-    name, 
-    -elevation, 
-    na.last=FALSE)
-  ),
-  ]
+arrange <- unique[with(unique, order(name, -elevation, na.last=FALSE)),]
 
 #reshape data
 reshape_dt <- dcast(
   setDT(arrange), 
   name + roughness ~ rowid(name, prefix="node"), 
   value.var=c("node", "x", "y", "elevation"))
-
 ```
 
 ## 3. Length
@@ -359,29 +320,16 @@ c. Use pythag. theorem to calculate length
 #This dataset has 18 based on the longest conduit)
 
 dist <- reshape_dt %>%  
-  rowwise(
-  ) %>% 
-  mutate (
-    dist_m = distm(c(x_node1, y_node1), 
+  rowwise() %>% 
+  mutate(dist_m = distm(c(x_node1, y_node1), 
                    c(x_node2, y_node2), 
-                   fun = distHaversine
-                   )
-    ) %>% 
-  mutate(
-    dist_ft = dist_m*3.28084
-    )
+                   fun = distHaversine)) %>% 
+  mutate(dist_ft = dist_m*3.28084)
 
 #part b and c - height then length
 lengths <- dist %>%  
-  mutate (
-    length = sqrt(
-      (dist_ft)^2 + (elevation_node1-elevation_node2)^2)
-          )%>% 
-  rename (
-    from_node = node_node1,
-    to_node = node_node2
-  )
-
+  mutate(length = sqrt((dist_ft)^2 + (elevation_node1-elevation_node2)^2))%>% 
+  rename(from_node = node_node1, to_node = node_node2)
 ```
 
 ## 4. File output for conduits
@@ -393,22 +341,13 @@ lengths <- dist %>%
 Use roughness value 0.01, for concrete pipes found in Appendix A-8 pg. 184 of EPA manual  
 ```{r}
 conduits <- lengths %>% 
-  mutate(
-    roughness = ifelse(is.na(roughness), 0.01, roughness)
-    ) %>% 
-  select(
-    name,
-    from_node, 
-    to_node,
-    length, 
-    roughness 
-    ) 
+  mutate(roughness = ifelse(is.na(roughness), 0.01, roughness)) %>% 
+  select(name, from_node, to_node, length, roughness) 
 
 conduits$inoffset <- 0
 conduits$outoffset <- 0
 conduits$initflow <- 0
 conduits$maxflow <- 0
-
 
 write.csv(conduits,"inp_conduits.csv", row.names = FALSE)
 ```
@@ -419,44 +358,20 @@ write.csv(conduits,"inp_conduits.csv", row.names = FALSE)
 ;;--------------	------------	----------------	----------  
 
 ```{r}
-xsection_dt <- merge(
-  lengths, 
-  unique, 
-  by = "name"
-  ) %>% 
-  select (
-    name, 
-    length, 
-    shape, 
-    diameter, 
-    width, 
-    height
-    )
+xsection_dt <- merge(lengths, unique, by = "name") %>% 
+  select(name, length, shape, diameter, width, height)
 ```
 
 
 a - concrete pipe dimensions
 ```{r}
 pipes<- xsection_dt %>% 
-  filter(
-    shape == "CIRCULAR"
-    ) %>% 
-  rename(
-    geom1 = diameter,
-    link = name
-    ) %>%
-  mutate(
-    geom1 = ifelse(is.na(geom1), "23", geom1)
-    ) %>% 
-  mutate(
-    geom1 = ifelse((geom1=="Other"), "23", (geom1))
-    )%>% 
-  select(
-    link, 
-    shape,
-    length,
-    geom1
-  )
+  filter(shape == "CIRCULAR") %>% 
+  rename(geom1 = diameter, link = name) %>%
+  mutate(geom1 = ifelse(is.na(geom1), "23", geom1)) %>% 
+  mutate(geom1 = ifelse((geom1=="Other"), "23", (geom1)))%>% 
+  select(link, shape, length, geom1)
+
 pipes$geom2 <- 0
 pipes$geom3 <- 0
 pipes$geom4 <- 0
@@ -467,27 +382,12 @@ pipes$culvert <- 0
 b - box culverts, ditches, and "other" conduit dimensions
 ```{r}
 ditch_box <- xsection_dt %>% 
-  filter(
-    shape == "RECT_CLOSED" | shape == "RECT_OPEN"
-    ) %>% 
-  rename (
-    geom1 = width, 
-    geom2 = height,
-    link = name
-    ) %>% 
-  mutate(
-    geom1 = ifelse(is.na(geom1), 5, geom1)
-    ) %>% 
-  mutate(geom2 = ifelse(is.na(geom2), 5, geom2)
-         ) %>% 
-  select( 
-    link, 
-    shape, 
-    length,
-    geom1,
-    geom2
-    
-  )
+  filter(shape == "RECT_CLOSED" | shape == "RECT_OPEN") %>% 
+  rename(geom1 = width, geom2 = height, link = name) %>% 
+  mutate(geom1 = ifelse(is.na(geom1), 5, geom1)) %>% 
+  mutate(geom2 = ifelse(is.na(geom2), 5, geom2)) %>% 
+  select(link, shape, length, geom1, geom2)
+
 ditch_box$geom3 <- 0
 ditch_box$geom4 <- 0
 ditch_box$barrels <- 
@@ -498,30 +398,13 @@ ditch_box$culvert <- 0
 c - channel (channelized stream) dimenssions
 ```{r}
 channel <- xsection_dt %>% 
-  filter(
-    is.na(shape)
-    ) %>% 
-  mutate(
-    shape = ifelse(is.na(shape), "TRAPEZOIDAL", shape)
-    ) %>% 
-  rename(
-    geom1 = width, 
-    geom2 = height,
-    link = name
-    ) %>% 
-  mutate(
-    geom1 = ifelse(is.na(geom1), 30, geom1)
-    ) %>% 
-  mutate(
-    geom2 = ifelse(is.na(geom2), 10, geom2)
-    ) %>% 
-  select(
-     link, 
-    shape,
-    length,
-    geom1,
-    geom2
-    )
+  filter(is.na(shape)) %>% 
+  mutate(shape = ifelse(is.na(shape), "TRAPEZOIDAL", shape)) %>% 
+  rename(geom1 = width, geom2 = height,link = name) %>% 
+  mutate(geom1 = ifelse(is.na(geom1), 30, geom1)) %>% 
+  mutate(geom2 = ifelse(is.na(geom2), 10, geom2)) %>% 
+  select(link, shape, length, geom1, geom2)
+
 #Geom3 and Geom4 are side lopes, which literature indicate vary from 1/1 to 1/2.  
 #Ive seen side slopes perpendicular to the ground, especially where homes are built.
 channel$geom3 <- 1
@@ -532,52 +415,13 @@ channel$culvert <- 0
 
 e- bind all tables
 ```{r}
-xsections_df <- rbind(
-  pipes, 
-  ditch_box, 
-  channel
-  ) %>% 
-  select(
-    link, 
-    shape, 
-    geom1, 
-    geom2, 
-    geom3, 
-    geom4, 
-    barrels, 
-    culvert, 
-    length
-    ) %>%  
-  distinct(
-    link, 
-    shape, 
-    geom1, 
-    geom2, 
-    .keep_all = TRUE
-    )
+xsections_df <- rbind(pipes, ditch_box, channel) %>% 
+  select(link, shape, geom1, geom2, geom3, geom4, barrels, culvert, length) %>%  
+  distinct(link, shape, geom1, geom2, .keep_all = TRUE)
 
-xsections <- rbind(
-  pipes, 
-  ditch_box, 
-  channel
-  ) %>% 
-  select(
-    link, 
-    shape, 
-    geom1, 
-    geom2, 
-    geom3, 
-    geom4, 
-    barrels, 
-    culvert
-    ) %>% 
-  distinct(
-    link, 
-    shape, 
-    geom1, 
-    geom2, 
-    .keep_all = TRUE
-    )
+xsections <- rbind(pipes, ditch_box, channel) %>% 
+  select(link, shape, geom1, geom2, geom3, geom4, barrels, culvert) %>% 
+  distinct(link, shape, geom1, geom2, .keep_all = TRUE)
 
 write.csv(xsections,"inp_xsections.csv", row.names = FALSE)
 ```
@@ -590,20 +434,12 @@ write.csv(xsections,"inp_xsections.csv", row.names = FALSE)
 ;;--------------	----------	----------	----------	
 ```{r}
 
-junctions <- unique %>% filter(
-    structure != "Inlet/Outlet" | is.na(structure)
-    ) %>% 
-  select(
-    node, 
-    elevation
-    ) %>% 
-  rename(
-    name = node
-    ) %>% 
-  distinct(
-    name,
-    .keep_all = TRUE
-  )
+junctions <- unique %>% 
+  filter(structure != "Inlet/Outlet" | is.na(structure)) %>% 
+  select(node, elevation) %>% 
+  rename(name = node) %>% 
+  distinct(name, .keep_all = TRUE)
+
 junctions$maxdepth <- 0
 junctions$initdepth <- 0
 junctions$surdepth <- 0
@@ -616,35 +452,15 @@ write.csv(junctions,"inp_junctions.csv", row.names = FALSE)
 Here is a csv that will help determine what junction to route each subcatchment's outlet to.
 ```{r, message = FALSE, results = 'hide'}
 route_to <- unique %>% 
-  select(
-    node, 
-    elevation,
-    subc
-    )
+  select(node, elevation, subc)
 
-route_to[
-  with(
-  route_to, order(
-    subc, 
-    -elevation, 
-    na.last=FALSE)
-  ),
-  ]
+route_to[with(route_to, order(subc, -elevation, na.last=FALSE)),]
 
 route_to2 <-unique %>% 
-  group_by(
-    subc
-    ) %>% 
-  mutate(
-    rank = row_number(subc)
-    ) %>% 
-  filter(
-    rank == 1 | is.na(rank)
-    ) %>% 
-  select(
-    subc,
-    node
-    )
+  group_by(subc) %>% 
+  mutate(rank = row_number(subc)) %>% 
+  filter(rank == 1 | is.na(rank)) %>% 
+  select(subc,node)
 
 write.csv(route_to2,"subc_outlet.csv", row.names = FALSE)
   
@@ -656,31 +472,19 @@ write.csv(route_to2,"subc_outlet.csv", row.names = FALSE)
 ;;--------------	----------	----------	----------------	--------	----------------  
 ```{r}
 outfalls <- unique %>% 
-   filter(
-    structure == "Inlet/Outlet"
-    ) %>% 
-  select(
-    node, 
-    elevation
-    ) %>% 
-  rename(
-    name = node
-    ) %>% 
-  distinct(
-    name,
-    .keep_all = TRUE
-  )
+  filter(structure == "Inlet/Outlet") %>% 
+  select(node, elevation) %>% 
+  rename(name = node) %>% 
+  distinct(name, .keep_all = TRUE)
+
 outfalls$type <- "FREE"
 outfalls$stagedata <- NA
 outfalls$gated <- "NO"
 outfalls$routeto <- NA
 
-#you will need to check these structures in SWMM. 
-#If these structures are at an end of a conduit, then they are outfalls, 
-#otherwise you can quickly turn them back into a junction in SWMM.
-
 write.csv(outfalls,"inp_outfalls.csv", row.names = FALSE)
 ```
+
 ## 8. Coordinates
 [COORDINATES]		
 ;;Node          	X-Coord           	Y-Coord           
@@ -689,17 +493,8 @@ write.csv(outfalls,"inp_outfalls.csv", row.names = FALSE)
 SWMM takes x and y that are in decimal degrees  (lat and long).
 ```{r}
 coordinates <- unique %>% 
-  select(
-    node, 
-    x, 
-    y
-    ) %>% 
-  distinct(
-    node,
-    x,
-    y,
-    .keep_all = TRUE
-  )
+  select(node, x, y) %>% 
+  distinct(node, x, y, .keep_all = TRUE)
 
 write.csv(coordinates,"inp_coordinates.csv", row.names = FALSE)
 ```
@@ -710,40 +505,20 @@ write.csv(coordinates,"inp_coordinates.csv", row.names = FALSE)
 ;;--------------	------------------	------------------
 ```{r}
 vertices <- vertices_dt %>%
-  select(
-    objectid,
-    point_x,
-    point_y
-  ) %>% 
-  rename(
-   link = objectid,
-   x = point_x,
-   y = point_y
-    ) %>% 
-  distinct(
-    link,
-    x,
-    y,
-    .keep_all = TRUE
-  )
+  select(objectid, point_x, point_y) %>% 
+  rename(link = objectid, x = point_x, y = point_y) %>% 
+  distinct(link, x, y, .keep_all = TRUE)
+
 vertices$c <- "C"
 
 #conduits
-vertices$link <- apply(
-  vertices,1,function(x) paste((x[4]), sep ="",(x[1]))
-  ) 
+vertices$link <- apply(vertices,1,function(x) paste((x[4]), sep ="",(x[1]))) 
 
 #remove space
-vertices$link <- gsub(
-  '\\s+', '', vertices$link
-  ) 
+vertices$link <- gsub('\\s+', '', vertices$link) 
  
-  vertices1 <- vertices %>% 
-  select(
-    link,
-    x,
-    y
-  )
+vertices1 <- vertices %>% 
+  select(link, x, y)
 
 write.csv(vertices1,"inp_vertices.csv", row.names = FALSE)
 ```

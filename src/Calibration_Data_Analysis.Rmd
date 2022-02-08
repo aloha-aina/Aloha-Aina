@@ -1,0 +1,866 @@
+---
+title: "Calibration Data Analysis"
+author: "Elmera Azadpour, Genevieve Chiong, Kristin Gill, Lauren Skube, and Cat Takata"
+date: "2/7/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(lubridate)
+library(tidyverse)
+library(here)
+library(dplyr)
+library(ggplot2)
+library(janitor)
+library(stringr)
+library(multiplex)
+library(ggpubr)
+```
+
+# Lower Watershed Data Comparison
+
+## Read in Paiko and Wailupe Valley School (WVS)
+```{r}
+kuliouou_rain <- read.csv(here("data", "precip_data", "NOAA_Paiko_76.csv"))
+wailupe_rain <-  read.csv(here("data", "precip_data", "NOAA_Wailupe_77.csv"))
+
+##Use lubridate to clean up the dates and times
+wailupe_rain$DATE <- ymd(wailupe_rain$DATE)
+kuliouou_rain$DATE <- mdy(kuliouou_rain$DATE)
+```
+
+## Data Tidying
+```{r}
+## for wailupe 1977-2014
+wailupe_tidy <- wailupe_rain %>% 
+  rename(station = STATION, station_name = STATION_NAME, elevation = ELEVATION, 
+         lat = LATITUDE, lon = LONGITUDE, date = DATE, time = TIME, qgag = QGAG, 
+         qgag_flag = Measurement.Flag, qgag_qual = Quality.Flag, qgag_units = Units, 
+         qpcp = QPCP, qpcp_flag = Measurement.Flag.1, qpcp_qual = Quality.Flag.1, 
+         qpcp_units = Units.1) %>% #renames columns
+  filter(station_name == "WAILUPE VALLEY SCHOOL 723.6 HI US") %>% #filter to Wailupe gauge only
+  filter(qpcp != "-9999",
+         qpcp != "999",
+         qpcp != "999.99",
+         qpcp_flag != "g",
+         qpcp_flag != "{",
+         qpcp_flag != "}",
+         qpcp_flag != "[",
+         qpcp_flag != "]",
+         qgag != "-9999.00",
+         qgag != "-9999",
+         qgag_flag != "g",
+         qgag_flag != "V",
+         qgag_flag != "P",
+         qgag_flag != "{",
+         qgag_flag != "}",
+         qgag_flag != "[",
+         qgag_flag != "]") ## removes all flagged data
+
+## paiko 1976- 2020
+kuliouou_tidy <- kuliouou_rain %>% 
+  rename(station = STATION, station_name = NAME, elevation = ELEVATION, 
+         lat = LATITUDE, lon = LONGITUDE, date = DATE, qpcp = PRCP) %>%
+  filter(station_name == "PAIKO DRIVE 723.4, HI US") 
+```
+
+```{r}
+wailupe_daily <- wailupe_tidy %>%  
+  group_by(date) %>%
+  summarize(
+    daily_pcp = sum(qpcp),
+    daily_vol = sum(qgag)) ## gives total summed precip data per day. HT is given in inches.
+
+kuliouou_daily <- kuliouou_tidy %>%  
+  group_by(date) %>%
+  summarize(
+    daily_pcp = sum(qpcp)) 
+```
+
+## explore time series 
+```{r}
+wailupe_daily$date <- ymd(wailupe_daily$date)
+kuliouou_daily$date <- ymd(kuliouou_daily$date)
+
+ggplot() +
+  geom_line(data = kuliouou_daily, aes(x=date, y=daily_pcp), size = 0.5, color = "seagreen") +
+  geom_line(data = wailupe_daily, aes(x=date, y=daily_pcp), size = 0.5,color="red") +
+  theme_minimal() + 
+  scale_y_continuous(breaks=seq(0,7,1)) +
+  scale_x_date(date_breaks = "5 years", date_labels = "%Y") +
+  ggtitle("NOAA Daily Total Precip: Wailupe Fire Station and Paiko Drive")
+
+wailupe_2013 <- wailupe_daily %>%
+  mutate(year = year(date)) %>% 
+  filter(year == 2013)
+
+kuliouou_2013 <- kuliouou_daily %>% 
+  mutate(year = year(date)) %>% 
+  filter(year == 2013)
+
+ggplot() +
+  geom_line(data = kuliouou_2013, aes(x=date, y=daily_pcp), size = 0.8, color = "blue") +
+  geom_line(data = wailupe_2013, aes(x=date, y=daily_pcp), size = 0.8,color="black") +
+  theme_minimal()
+```
+
+```{r}
+# Wailupe Valley School vs. Paiko Drive
+kuliouou_daily <- kuliouou_daily %>% 
+  mutate(year = year(date)) %>% 
+  mutate(month = month(date)) %>% 
+  mutate(day = day(date))
+
+kuliouou_january_2005 <- kuliouou_daily %>% 
+  filter(year == 2005) %>% 
+  filter(month == 1)
+
+wailupe_daily <- wailupe_daily %>% 
+  mutate(year = year(date)) %>% 
+  mutate(month = month(date)) %>% 
+  mutate(day = day(date))
+
+wailupe_january_2005 <- wailupe_daily %>% 
+  filter(year == 2005) %>% 
+  filter(month == 1)
+
+#plot January 2005
+ggplot() +
+  geom_line(data = kuliouou_january_2005, aes(x = day,
+                                           y = daily_pcp)) +
+  geom_point(data = kuliouou_january_2005, aes(x = day,
+                                           y = daily_pcp)) +
+  geom_line(data = wailupe_january_2005, aes(x = day,
+                                             y = daily_pcp)) +
+  geom_point(data = wailupe_january_2005, aes(x = day,
+                                             y = daily_pcp)) +
+  theme_minimal()
+
+#plot December 2011
+kuliouou_december_2011 <- kuliouou_daily %>% 
+  filter(year == 2011) %>% 
+  filter(month == 12) %>% 
+  filter(day <= 24)
+
+wailupe_december_2011 <- wailupe_daily %>% 
+  filter(year == 2011) %>% 
+  filter(month == 12)
+
+ggplot() +
+  geom_line(data = kuliouou_december_2011, aes(x = day,
+                                           y = daily_pcp,
+                                           color = "blue")) +
+  geom_point(data = kuliouou_december_2011, aes(x = day,
+                                           y = daily_pcp),
+             color = "blue") +
+  geom_line(data = wailupe_december_2011, aes(x = day,
+                                             y = daily_pcp,
+                                             color = "red")) +
+  geom_point(data = wailupe_december_2011, aes(x = day,
+                                             y = daily_pcp),
+             color = "red") +
+  scale_color_manual(values = c("blue", "red"), labels = c("Kuliouou", "Wailupe")) +
+  theme_minimal() +
+  theme(legend.title = element_blank()) +
+  labs(x = "Day",
+       y = "Daily Precipitation",
+       title = "December 2011")
+
+# compare yearly
+kuliouou_yearly <- kuliouou_daily %>% 
+  group_by(year) %>% 
+  mutate(sum = sum(daily_pcp)) %>% 
+  select(year, sum) %>% 
+  distinct() %>% 
+  drop_na() %>% 
+  filter(year >= 1996 & year <= 2013)
+
+wailupe_yearly <- wailupe_daily %>% 
+  group_by(year) %>% 
+  mutate(sum = sum(daily_pcp)) %>% 
+  select(year, sum) %>% 
+  distinct() %>% 
+  drop_na()
+
+ggplot() +
+  geom_line(data = kuliouou_yearly, aes(x = year,
+                                     y = sum,
+                                     color = "blue")) +
+  geom_point(data = kuliouou_yearly, aes(x = year,
+                                     y = sum),
+             color = "blue") +
+  geom_line(data = wailupe_yearly, aes(x = year,
+                                     y = sum,
+                                     color = "red")) +
+  geom_point(data = wailupe_yearly, aes(x = year,
+                                     y = sum),
+             color = "red") +
+  scale_color_manual(values = c("blue", "red"), labels = c("Kuliouou", "Wailupe")) +
+  theme_minimal() +
+  theme(legend.title = element_blank()) +
+  labs(x = "Year",
+       y = "Sum of Precipitation")
+```
+
+
+```{r}
+# all data
+kuliouou_wailupe_comp <- merge(kuliouou_daily, wailupe_daily, by = "date")
+
+ggplot(data = kuliouou_wailupe_comp, aes(x = daily_pcp.x,
+                                      y = daily_pcp.y)) +
+  geom_point() +
+  theme_minimal() +
+  labs(x = "Kuliouou",
+       y = "Wailupe")
+
+# for a specified stormy period
+kuliouou_wailupe_comp_2008_storm <- kuliouou_wailupe_comp %>% 
+  filter(year.x == 2008) %>% 
+  filter(month.x == 12)
+
+ggplot(data = kuliouou_wailupe_comp_2008_storm, aes(x = daily_pcp.x,
+                                      y = daily_pcp.y)) +
+  geom_point() +
+  theme_minimal() +
+  theme_minimal() +
+  labs(x = "Kuliouou",
+       y = "Wailupe")
+ 
+# for a specified year: 2013
+kuliouou_wailupe_comp_2013 <- kuliouou_wailupe_comp %>% 
+  filter(year.x == 2013)
+
+ggplot(data = kuliouou_wailupe_comp_2013, aes(x = daily_pcp.x,
+                                      y = daily_pcp.y)) +
+  geom_point() +
+  theme_minimal() +
+  theme_minimal() +
+  labs(x = "Kuliouou",
+       y = "Wailupe")
+
+# for a specified year: 2008
+kuliouou_wailupe_comp_2008 <- kuliouou_wailupe_comp %>% 
+  filter(year.x == 2008)
+
+ggplot(data = kuliouou_wailupe_comp_2008, aes(x = daily_pcp.x,
+                                      y = daily_pcp.y)) +
+  geom_point() +
+  theme_minimal() +
+  theme_minimal() +
+  labs(x = "Kuliouou",
+       y = "Wailupe")
+
+# 2002 January
+kuliouou_wailupe_comp_2002 <- kuliouou_wailupe_comp %>% 
+  filter(year.x == 2002) %>% 
+  filter(month.x == 1)
+
+ggplot(data = kuliouou_wailupe_comp_2002, aes(x = daily_pcp.x,
+                                      y = daily_pcp.y)) +
+  geom_point() +
+  theme_minimal() +
+  theme_minimal() +
+  labs(x = "Kuliouou",
+       y = "Wailupe")
+
+# 2011 December
+kuliouou_wailupe_comp_2011 <- kuliouou_wailupe_comp %>% 
+  filter(year.x == 2011) %>% 
+  filter(month.x == 12)
+
+ggplot(data = kuliouou_wailupe_comp_2011, aes(x = daily_pcp.x,
+                                      y = daily_pcp.y)) +
+  geom_point() +
+  theme_minimal() +
+  theme_minimal() +
+  labs(x = "Kuliouou",
+       y = "Wailupe",
+       title = "Daily Precipitation December 2011") +
+  geom_smooth(method='lm', formula = y~x)
+
+  #stat_regline_equation(label.x = 0.25,
+  #                      label.y = 1) +
+  #stat_cor(label.x = 0.25,
+   #        label.y = 0.8)
+
+# yearly comparison
+kuliouou_wailupe_comp_yearly <- merge(paiko_yearly, wailupe_yearly, by = "year")
+
+ggplot(data = kuliouou_wailupe_comp_yearly, aes(x = sum.x,
+                                      y = sum.y)) +
+  geom_point() +
+  theme_minimal() +
+  theme_minimal() +
+  labs(x = "Kuliouou",
+       y = "Wailupe",
+       title = "Yearly Precipitation: 1996-2013") +
+  geom_smooth(method='lm', formula = y~x) 
+  #stat_regline_equation(label.x = 10,
+   #                     label.y = 33) +
+  #stat_cor(label.x = 10,
+    #       label.y = 30)
+```
+
+```{r}
+# continuing to look for storms
+kuliouou_match <- kuliouou_daily %>% 
+  filter(year >= 2009 & year <= 2010) %>% 
+  filter(daily_pcp > 0)
+
+wailupe <- wailupe_daily %>% 
+  filter(year >= 2009 & year <= 2010) %>% 
+  filter(daily_pcp > 0)
+
+# Jaunary 4-10, 1996
+wailupe_jan_1996 <- wailupe_daily %>% 
+  filter(year == 1996) %>% 
+  filter(month == 1)
+
+kuliouou_jan_1996 <- kuliouou_daily %>% 
+  filter(year == 1996) %>% 
+  filter(month == 1) %>% 
+  filter(day %in% c(4,5,7,10,18,19,24,25,27,28,30))
+
+ggplot() +
+  geom_line(data = wailupe_jan_1996, aes(x = day,
+                                         y = daily_pcp,
+                                         color = "blue"),
+            lwd = 1) +
+  geom_line(data = kuliouou_jan_1996, aes(x = day,
+                                       y = daily_pcp,
+                                       color = "red"),
+            lwd = 1) +
+  theme_minimal() +
+  scale_color_manual(values = c("#000000", "#009E73"), labels = c("Wailupe", "Kuliouou")) +
+  theme(legend.title = element_blank()) +
+  labs(title = "Jaunary 4-10, 1996", x = "Days", y = "Precipitation (inches)")
+
+# November 12-16, 1996
+wailupe_nov_1996 <- wailupe_daily %>% 
+  filter(year == 1996) %>% 
+  filter(month == 11) %>% 
+  filter(day %in% c(11:17))
+
+kuliouou_nov_1996 <- kuliouou_daily %>% 
+  filter(year == 1996) %>% 
+  filter(month == 11) %>% 
+  filter(day %in% c(11:17))
+
+ggplot() +
+  geom_line(data = wailupe_nov_1996, aes(x = day,
+                                         y = daily_pcp,
+                                         color = "blue"),
+            lwd = 0.7) +
+  geom_line(data = kuliouou_nov_1996, aes(x = day,
+                                       y = daily_pcp,
+                                       color = "red"),
+            lwd = 0.7) +
+  theme_minimal() +
+  scale_color_manual(values = c("#000000", "#009E73"), labels = c("Wailupe", "Kuliouou")) +
+  theme(legend.title = element_blank()) +
+  labs(title = "November 12-16, 1996", x = "Days", y = "Precipitation (inches)")
+
+# January 28-31, 2005
+wailupe_jan_2005 <- wailupe_daily %>% 
+  filter(year == 2005) %>% 
+  filter(month == 1) %>% 
+  filter(day %in% c(28:31))
+
+kuliouou_jan_2005 <- kuliouou_daily %>% 
+  filter(year == 2005) %>% 
+  filter(month == 1) %>% 
+  filter(day %in% c(28:31))
+
+ggplot() +
+  geom_line(data = wailupe_jan_2005, aes(x = day,
+                                         y = daily_pcp,
+                                         color = "blue"),
+            lwd = 0.7) +
+  geom_line(data = kuliouou_jan_2005, aes(x = day,
+                                       y = daily_pcp,
+                                       color = "red"),
+            lwd = 0.7) +
+  theme_minimal() +
+  scale_color_manual(values = c("#000000", "#009E73"), labels = c("Wailupe", "Kuliouou")) +
+  theme(legend.title = element_blank()) +
+  labs(title = "January 28-31, 2005", x = "Days", y = "Precipitation (inches)")
+```
+
+```{r}
+### 2009 - 2010 (lines up with the streamgage data)
+# March 6-15, 2009
+wailupe_mar_2009 <- wailupe_daily %>% 
+  filter(year == 2009) %>% 
+  filter(month == 3) %>% 
+  filter(day %in% c(6:15))
+
+kuliouou_mar_2009 <- kuliouou_daily %>% 
+  filter(year == 2009) %>% 
+  filter(month == 3) %>% 
+  filter(day %in% c(6:15))
+
+ggplot() +
+  geom_line(data = wailupe_mar_2009, aes(x = day,
+                                         y = daily_pcp,
+                                         color = "blue")) +
+  geom_point(data = wailupe_mar_2009, aes(x = day,
+                                         y = daily_pcp),
+             color = "blue") +
+  geom_line(data = kuliouou_mar_2009, aes(x = day,
+                                       y = daily_pcp,
+                                       color = "red")) +
+  geom_point(data = kuliouou_mar_2009, aes(x = day,
+                                       y = daily_pcp),
+             color = "red") +
+  
+  theme_minimal() +
+  scale_color_manual(values = c("blue", "red"), labels = c("Wailupe", "Kuliouou")) +
+  theme(legend.title = element_blank()) +
+  labs(title = "March 6-15, 2009")
+
+# December 9-25, 2010
+wailupe_dec_2010 <- wailupe_daily %>% 
+  filter(year == 2010) %>% 
+  filter(month == 12) %>% 
+  filter(day %in% c(9:25))
+
+kuliouou_dec_2010 <- kuliouou_daily %>% 
+  filter(year == 2010) %>% 
+  filter(month == 12) %>% 
+  filter(day %in% c(9:25))
+
+ggplot() +
+  geom_line(data = wailupe_dec_2010, aes(x = day,
+                                         y = daily_pcp,
+                                         color = "blue")) +
+  geom_point(data = wailupe_dec_2010, aes(x = day,
+                                         y = daily_pcp),
+             color = "blue") +
+  geom_line(data = kuliouou_dec_2010, aes(x = day,
+                                       y = daily_pcp,
+                                       color = "red")) +
+  geom_point(data = kuliouou_dec_2010, aes(x = day,
+                                       y = daily_pcp),
+             color = "red") +
+  theme_minimal() +
+  scale_color_manual(values = c("blue", "red"), labels = c("Wailupe", "Kuliouou")) +
+  theme(legend.title = element_blank()) +
+  labs(title = "December 9-25, 2010")
+
+# October - November, 2010
+wailupe_nov_2010 <- wailupe_daily %>% 
+  filter(year == 2010) %>% 
+  filter(month %in% c(10,11)) %>% 
+  filter(date >= "2010-10-29" & date <= "2010-11-05")
+
+kuliouou_nov_2010 <- kuliouou_daily %>% 
+ filter(year == 2010) %>% 
+  filter(month %in% c(10,11)) %>% 
+  filter(date >= "2010-10-29" & date <= "2010-11-05")
+
+ggplot() +
+  geom_line(data = wailupe_nov_2010, aes(x = date,
+                                         y = daily_pcp,
+                                         color = "blue")) +
+  geom_point(data = wailupe_nov_2010, aes(x = date,
+                                         y = daily_pcp),
+             color = "blue") +
+  geom_line(data = kuliouou_nov_2010, aes(x = date,
+                                       y = daily_pcp,
+                                       color = "red")) +
+  geom_point(data = kuliouou_nov_2010, aes(x = date,
+                                       y = daily_pcp),
+            color = "red") +
+  theme_minimal() +
+  scale_color_manual(values = c("blue", "red"), labels = c("Wailupe", "Kuliouou")) +
+  theme(legend.title = element_blank()) +
+  labs(title = "October - November, 2010")
+
+# all 2009
+wailupe_2009 <- wailupe_daily %>% 
+  filter(year == 2009)
+
+kuliouou_2009 <- kuliouou_daily %>% 
+ filter(year == 2009)
+
+ggplot() +
+  geom_line(data = wailupe_2009, aes(x = date,
+                                         y = daily_pcp,
+                                         color = "blue")) +
+  geom_line(data = kuliouou_2009, aes(x = date,
+                                       y = daily_pcp,
+                                       color = "red")) +
+  theme_minimal() +
+  scale_color_manual(values = c("blue", "red"), labels = c("Wailupe", "Kuliouou")) +
+  theme(legend.title = element_blank()) +
+  labs(title = "2009")
+
+# correlation plot 2009
+wailupe_kuliouou_2009 <- merge(kuliouou_2009, wailupe_2009, by = "date")
+
+ggplot(data = wailupe_kuliouou_2009, aes(x = daily_pcp.x,
+                                      y = daily_pcp.y)) +
+  geom_point() +
+  theme_minimal() +
+  labs(x = "Kuliouou",
+       y = "Wailupe",
+       title = "Precipitation 2009") +
+  geom_smooth(method='lm', formula = y~x)
+
+# November - December, 2009
+wailupe_nov_2009 <- wailupe_daily %>% 
+  filter(year == 2009) %>%
+  filter(date >= "2009-11-29" & date < "2009-12-15")
+
+kuliouou_nov_2009 <- kuliouou_daily %>% 
+  filter(year == 2009) %>%
+  filter(date >= "2009-11-29" & date <= "2009-12-03")
+
+ggplot() +
+  geom_line(data = wailupe_nov_2009, aes(x = date,
+                                         y = daily_pcp,
+                                         color = "blue"),
+            lwd = 0.7) +
+  geom_line(data = kuliouou_nov_2009, aes(x = date,
+                                       y = daily_pcp,
+                                       color = "red"),
+            lwd = 0.7) +
+  geom_point(data = wailupe_nov_2009, aes(x = date,
+                                         y = daily_pcp),
+             color = "#000000") +
+  geom_point(data = kuliouou_nov_2009, aes(x = date,
+                                       y = daily_pcp),
+             color = "#009E73") +
+  theme_minimal() +
+  scale_color_manual(values = c("#000000", "#009E73"), labels = c("Wailupe", "Kuliouou")) +
+  theme(legend.title = element_blank()) +
+  labs(title = "November - December, 2009", x = "Date", y = "Precipitaion (inches)")
+
+# all 2010
+wailupe_2010 <- wailupe_daily %>% 
+  filter(year == 2010)
+
+kuliouou_2010 <- kuliouou_daily %>% 
+ filter(year == 2010)
+
+ggplot() +
+  geom_line(data = wailupe_2010, aes(x = date,
+                                         y = daily_pcp,
+                                         color = "blue")) +
+  geom_line(data = kuliouou_2010, aes(x = date,
+                                       y = daily_pcp,
+                                       color = "red")) +
+  theme_minimal() +
+  scale_color_manual(values = c("blue", "red"), labels = c("Wailupe", "Kuliouou")) +
+  theme(legend.title = element_blank()) +
+  labs(title = "2010")
+
+# correlation plot 2010
+wailupe_kuliouou_2010 <- merge(kuliouou_2010, wailupe_2010, by = "date")
+
+ggplot(data = wailupe_kuliouou_2010, aes(x = daily_pcp.x,
+                                      y = daily_pcp.y)) +
+  geom_point() +
+  theme_minimal() +
+  labs(x = "Kuliouou",
+       y = "Wailupe",
+       title = "Precipitation 2010") +
+  geom_smooth(method='lm', formula = y~x)
+```
+
+
+# Upper Watershed
+```{r}
+kuli_rain <- read.csv(here("data", "precip_data", "KuliRain_20210512.csv")) %>% 
+  select(-X)
+
+kuli_rain$date <- as_datetime(kuli_rain$date)
+
+kuli_rain_tidy <- kuli_rain %>% 
+  mutate(year = year(date), 
+         month = month(date), 
+         day = day(date), 
+         hour = hour(date))
+
+kuli_rain_daily <- kuli_rain_tidy %>% 
+  group_by(year, month, day) %>% 
+  summarise(daily_pcp = sum(rain)) %>%
+  mutate(date = make_date(year, month, day)) 
+
+kuli_rain_daily_in <- kuli_rain_daily %>% 
+  mutate(daily_pcp = daily_pcp/25.4) #divide by 25.4: convert from mm to inches
+
+ggplot(kuli_rain_daily, aes(date, daily_pcp)) +
+  geom_line(color = "blue") + 
+  labs(x= "Year", y="Precipitation (mm)", title = "Kuli'ou'ou Ridge Rainfall") + 
+  theme_minimal() 
+
+kuli_plot_pcp <- ggplot(kuli_rain_daily_in, aes(date, daily_pcp)) +
+  geom_line(color = "blue") + 
+  labs(x= "Year", y="Precipitation (in)", title = "Kuli'ou'ou Ridge Rainfall") + 
+  theme_minimal() 
+
+kuli_plot_pcp
+```
+
+## Hawai'i Loa Ridge Rainfall
+```{r}
+hawaiiloa_rain <- read.csv(here("data", "precip_data", "HawaiiLoaRain_20210512.csv"))
+
+hawaiiloa_rain$date <- as_datetime(hawaiiloa_rain$date)
+
+hawaiiloa_rain_tidy <- hawaiiloa_rain %>% 
+  mutate(year = year(date), 
+         month = month(date), 
+         day = day(date), 
+         hour = hour(date))
+
+hawaiiloa_rain_daily <- hawaiiloa_rain_tidy %>% 
+  group_by(year, month,day) %>% 
+  summarise(daily_pcp = sum(rain)) %>% 
+  mutate(date = make_date(year, month, day)) %>% 
+  mutate(daily_pcp = daily_pcp/25.4)
+
+hawaiiloa_plot_pcp <- ggplot(hawaiiloa_rain_daily, aes(date, daily_pcp)) +
+  geom_line(color = "blue") +
+  labs(x= "Year", y="Precipitation (in)", title = "Hawai'i Loa Ridge Rainfall") + 
+  theme_minimal() 
+
+hawaiiloa_plot_pcp
+```
+
+## Wiliwilinui Ridge Rainfall
+```{r}
+wili_rain <- read.csv(here("data", "precip_data", "WiliRain_20210512.csv"))
+
+wili_rain$date <- as_datetime(wili_rain$date)
+
+wili_rain_tidy <- wili_rain %>% 
+  mutate(year = year(date), 
+         month = month(date), 
+         day = day(date), 
+         hour = hour(date))
+
+wili_rain_daily <- wili_rain_tidy %>% 
+  group_by(year, month,day) %>% 
+  summarise(daily_pcp = sum(rain)) %>% 
+  mutate(date = make_date(year, month, day)) %>% 
+  mutate(daily_pcp = daily_pcp/25.4)
+
+wili_plot_pcp <- ggplot(wili_rain_daily, aes(date, daily_pcp)) +
+  geom_line(color = "blue") +
+  labs(x= "Year", y="Precipitation (in)", title = "Wiliwilinui Ridge Rainfall") + 
+  theme_minimal()
+
+
+wili_plot_pcp
+```
+
+```{r}
+# compare Wiliwilnui Ridge to Kuliouou Ridge
+# compare hourly
+
+wili_rain_hourly <- wili_rain_tidy %>% 
+  mutate(rain_in = rain/25.4) %>% 
+  filter(year == 2021) %>% 
+  filter(month == 1) %>% 
+  group_by(year, month, day) %>% 
+  filter(day %in% c(16,17,18,19,20))
+
+kuli_rain_hourly <- kuli_rain_tidy %>% 
+  mutate(rain_in = rain/25.4) %>% 
+  filter(year == 2021) %>% 
+  filter(month == 1) %>% 
+  group_by(year, month, day) %>% 
+  filter(day %in% c(16,17,18,19,20))
+
+# daily time series 2021
+wili_rain_daily_2021 <- wili_rain_daily %>% 
+  filter(year == 2021)
+
+kuli_rain_daily_2021 <- kuli_rain_daily_in %>% 
+  filter(year == 2021)
+
+ggplot() +
+  geom_line(data = wili_rain_daily_2021, aes(x = date,
+                                             y = daily_pcp,
+                                             color = "blue")) +
+  geom_line(data = kuli_rain_daily_2021, aes(x = date,
+                                             y = daily_pcp,
+                                             color = "pink")) +
+  theme_minimal() +
+  scale_color_manual(values = c("blue", "darkgreen"), labels = c("Wiliwilinui Ridge", "Kuliouou Ridge")) +
+  theme(legend.title = element_blank()) 
+
+kuli_wili_daily_2021 <- merge(kuli_rain_daily_2021, wili_rain_daily_2021, by = "date")
+
+ggplot(data = kuli_wili_daily_2021, aes(x = daily_pcp.x,
+                                  y = daily_pcp.y)) +
+  geom_point() +
+  geom_smooth(method='lm', formula = y~x) +
+  stat_regline_equation(label.x = 0.25,
+                        label.y = 3) +
+  stat_cor(label.x = 0.25,
+           label.y = 3.3) +
+  theme_minimal() +
+  labs(x = "Kuliouou Ridge",
+       y = "Wiliwilinui Ridge")
+
+## entire time series 
+ggplot() +
+  geom_line(data = wili_rain_hourly, aes(x = date,
+                                     y = rain_in,
+                                     color = "blue")) +
+  geom_line(data = kuli_rain_hourly, aes(x = date,
+                                     y = rain_in,
+                                     color = "red")) +
+  theme_minimal() +
+  scale_color_manual(values = c("blue", "red"), labels = c("Wiliwilinui Ridge", "Kuliouou Ridge")) +
+  theme(legend.title = element_blank()) 
+
+
+# compare the 18th
+wili_rain_18 <- wili_rain_hourly %>% 
+  filter(day == 18)
+
+kuli_rain_18 <- kuli_rain_hourly %>% 
+  filter(day == 18)
+
+ggplot() +
+  geom_line(data = wili_rain_18, aes(x = hour,
+                                     y = rain_in)) +
+  geom_line(data = kuli_rain_18, aes(x = hour,
+                                     y = rain_in)) +
+  theme_minimal()
+
+# correlation plot
+kuli_wili_comp <- merge(kuli_rain_18, wili_rain_18, by = "hour")
+
+ggplot(data = kuli_wili_comp, aes(x = rain_in.x,
+                                  y = rain_in.y)) +
+  geom_point() +
+  geom_smooth(method='lm', formula = y~x) +
+  stat_regline_equation(label.x = 0.25,
+                        label.y = 0.75) +
+  stat_cor(label.x = 0.25,
+           label.y = 0.8) +
+  theme_minimal() +
+  labs(x = "Kuliouou Ridge",
+       y = "Wiliwilinui Ridge")
+  
+```
+
+```{r}
+# compare Hawaii Loa Ridge to Kuliouou Ridge
+# compare hourly
+
+hawaiiloa_rain_hourly <- hawaiiloa_rain_tidy %>% 
+  mutate(rain_in = rain/25.4) %>% 
+  filter(year == 2021) %>% 
+  filter(month == 1) %>% 
+  group_by(year, month, day) %>% 
+  filter(day %in% c(16,17,18,19,20))
+
+kuli_rain_hourly <- kuli_rain_tidy %>% 
+  mutate(rain_in = rain/25.4) %>% 
+  filter(year == 2021) %>% 
+  filter(month == 1) %>% 
+  group_by(year, month, day) %>% 
+  filter(day %in% c(16,17,18,19,20))
+
+# compare the 18th
+kuli_rain_18 <- kuli_rain_hourly %>% 
+  filter(day == 18)
+
+hawaiiloa_rain_18 <- hawaiiloa_rain_hourly %>% 
+  filter(day == 18)
+
+ggplot() +
+  geom_line(data = kuli_rain_18, aes(x = hour,
+                                     y = rain_in,
+                                     color = "blue")) +
+  geom_line(data = hawaiiloa_rain_18, aes(x = hour,
+                                     y = rain_in,
+                                     color = "red")) +
+  theme_minimal() +
+  scale_color_manual(values = c("blue", "red"), labels = c("Kuliouou", "Hawaii Loa")) +
+  theme(legend.title = element_blank())
+
+# correlation plot
+kuli_hawaiiloa_comp <- merge(kuli_rain_18, hawaiiloa_rain_18, by = "hour")
+
+ggplot(data = kuli_hawaiiloa_comp, aes(x = rain_in.x,
+                                  y = rain_in.y)) +
+  geom_point() +
+  geom_smooth(method='lm', formula = y~x) +
+  stat_regline_equation(label.x = 0.25,
+                        label.y = 0.75) +
+  stat_cor(label.x = 0.25,
+           label.y = 0.8) +
+  theme_minimal() +
+  labs(x = "Kuliouou Ridge",
+       y = "Hawaii Loa Ridge")
+```
+
+```{r}
+# all three plotted together
+
+ggplot() +
+  geom_line(data = kuli_rain_18, aes(x = hour,
+                                     y = rain_in,
+                                     color = "#000000"),
+            lwd = 0.7) +
+  geom_line(data = hawaiiloa_rain_18, aes(x = hour,
+                                     y = rain_in,
+                                     color = "#009E73"),
+            lwd = 0.7) +
+  geom_line(data = wili_rain_18, aes(x = hour,
+                                     y = rain_in,
+                                     color = "#D55E00"),
+            lwd = 0.7) +
+  theme_minimal() +
+  scale_color_manual(values = c("#000000", "#009E73", "#D55E00"), labels = c("Kuliouou", "Wiliwilinui", "Hawaii Loa")) +
+  theme(legend.title = element_blank()) +
+  labs(y = "Precipitation (inches)", x = "Time (hours)", title = "Ridge Precipitation January 18, 2021")
+```
+
+```{r}
+# Hawaii Loa vs. Kuliouou - January 2021 daily sum
+hawaiiloa_rain_hourly <- hawaiiloa_rain_tidy %>% 
+  mutate(rain_in = rain/25.4) %>% 
+  group_by(year, month) %>% 
+  filter(year == 2021) %>% 
+  filter(month == 1) %>% 
+  group_by(day) %>% 
+  mutate(daily_sum = sum(rain_in)) %>% 
+  select(day, daily_sum) %>% 
+  distinct()
+
+kuli_rain_hourly <- kuli_rain_tidy %>% 
+  mutate(rain_in = rain/25.4) %>% 
+  group_by(year, month) %>% 
+  filter(year == 2021) %>% 
+  filter(month == 1) %>% 
+  group_by(day) %>% 
+  mutate(daily_sum = sum(rain_in)) %>% 
+  select(day, daily_sum) %>% 
+  distinct()
+
+# correlation plot
+kuli_hawaiiloa_comp_overall <- merge(kuli_rain_hourly, hawaiiloa_rain_hourly, by = "day")
+
+ggplot(data = kuli_hawaiiloa_comp_overall, aes(x = daily_sum.x,
+                                  y = daily_sum.y)) +
+  geom_point() +
+  geom_smooth(method='lm', formula = y~x) +
+  stat_regline_equation(label.x = 0.25,
+                        label.y = 3) +
+  stat_cor(label.x = 0.25,
+           label.y = 3.3) +
+  theme_minimal() +
+  labs(x = "Kuliouou Ridge",
+       y = "Hawaii Loa Ridge")
+```
+
