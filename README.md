@@ -1,7 +1,7 @@
 Master of Environmental Science and Management: Master's Group Project (2022)
 
 **Optimal Green Infrastructure: Reducing Stormwater Pollution in Maunalua Bay, O'ahu, Hawai'i
-Maunalua Bay water and sand**
+Maunalua Bay**
 
 ![image](https://github.com/user-attachments/assets/22bff752-a57e-4130-aac6-13c1c75fe1b0)
 
